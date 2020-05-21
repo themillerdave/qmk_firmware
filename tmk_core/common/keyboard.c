@@ -71,6 +71,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifdef MIDI_ENABLE
 #    include "process_midi.h"
 #endif
+#ifdef JOYSTICK_ENABLE
+#    include "process_joystick.h"
+#endif
 #ifdef HD44780_ENABLE
 #    include "hd44780.h"
 #endif
@@ -335,6 +338,16 @@ MATRIX_LOOP_END:
     matrix_scan_perf_task();
 #endif
 
+#if defined(RGBLIGHT_ENABLE)
+    rgblight_task();
+#endif
+
+#if defined(BACKLIGHT_ENABLE)
+#    if defined(BACKLIGHT_PIN) || defined(BACKLIGHT_PINS)
+    backlight_task();
+#    endif
+#endif
+
 #ifdef QWIIC_ENABLE
     qwiic_task();
 #endif
@@ -384,6 +397,10 @@ MATRIX_LOOP_END:
     if (velocikey_enabled()) {
         velocikey_decelerate();
     }
+#endif
+
+#ifdef JOYSTICK_ENABLE
+    joystick_task();
 #endif
 
     // update LED

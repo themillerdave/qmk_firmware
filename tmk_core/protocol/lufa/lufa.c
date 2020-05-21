@@ -54,7 +54,6 @@
 #include "quantum.h"
 #include <util/atomic.h>
 #include "outputselect.h"
-#include "rgblight_reconfig.h"
 
 #ifdef NKRO_ENABLE
 #    include "keycode_config.h"
@@ -78,16 +77,16 @@ extern keymap_config_t keymap_config;
 #    include "virtser.h"
 #endif
 
-#if (defined(RGB_MIDI) || defined(RGBLIGHT_ANIMATIONS)) && defined(RGBLIGHT_ENABLE)
-#    include "rgblight.h"
-#endif
-
 #ifdef MIDI_ENABLE
 #    include "qmk_midi.h"
 #endif
 
 #ifdef RAW_ENABLE
 #    include "raw_hid.h"
+#endif
+
+#ifdef JOYSTICK_ENABLE
+#    include "joystick.h"
 #endif
 
 uint8_t keyboard_idle = 0;
@@ -269,6 +268,66 @@ static void Console_Task(void) {
 #endif
 
 /*******************************************************************************
+ * Joystick
+ ******************************************************************************/
+#ifdef JOYSTICK_ENABLE
+void send_joystick_packet(joystick_t *joystick) {
+    uint8_t timeout = 255;
+
+    joystick_report_t r = {
+#    if JOYSTICK_AXES_COUNT > 0
+        .axes = {joystick->axes[0],
+
+#        if JOYSTICK_AXES_COUNT >= 2
+                 joystick->axes[1],
+#        endif
+#        if JOYSTICK_AXES_COUNT >= 3
+                 joystick->axes[2],
+#        endif
+#        if JOYSTICK_AXES_COUNT >= 4
+                 joystick->axes[3],
+#        endif
+#        if JOYSTICK_AXES_COUNT >= 5
+                 joystick->axes[4],
+#        endif
+#        if JOYSTICK_AXES_COUNT >= 6
+                 joystick->axes[5],
+#        endif
+        },
+#    endif  // JOYSTICK_AXES_COUNT>0
+
+#    if JOYSTICK_BUTTON_COUNT > 0
+        .buttons = {joystick->buttons[0],
+
+#        if JOYSTICK_BUTTON_COUNT > 8
+                    joystick->buttons[1],
+#        endif
+#        if JOYSTICK_BUTTON_COUNT > 16
+                    joystick->buttons[2],
+#        endif
+#        if JOYSTICK_BUTTON_COUNT > 24
+                    joystick->buttons[3],
+#        endif
+        }
+#    endif  // JOYSTICK_BUTTON_COUNT>0
+    };
+
+    /* Select the Joystick Report Endpoint */
+    Endpoint_SelectEndpoint(JOYSTICK_IN_EPNUM);
+
+    /* Check if write ready for a polling interval around 10ms */
+    while (timeout-- && !Endpoint_IsReadWriteAllowed()) _delay_us(40);
+    if (!Endpoint_IsReadWriteAllowed()) return;
+
+    /* Write Joystick Report Data */
+    Endpoint_Write_Stream_LE(&r, sizeof(joystick_report_t), NULL);
+
+    /* Finalize the stream transfer to send the last packet */
+    Endpoint_ClearIN();
+}
+#endif
+
+/*******************************************************************************
  * USB Events
  ******************************************************************************/
 /*
@@ -414,6 +473,9 @@ void EVENT_USB_Device_ConfigurationChanged(void) {
     ConfigSuccess &= Endpoint_ConfigureEndpoint(CDC_NOTIFICATION_EPADDR, EP_TYPE_INTERRUPT, CDC_NOTIFICATION_EPSIZE, ENDPOINT_BANK_SINGLE);
     ConfigSuccess &= Endpoint_ConfigureEndpoint(CDC_OUT_EPADDR, EP_TYPE_BULK, CDC_EPSIZE, ENDPOINT_BANK_SINGLE);
     ConfigSuccess &= Endpoint_ConfigureEndpoint(CDC_IN_EPADDR, EP_TYPE_BULK, CDC_EPSIZE, ENDPOINT_BANK_SINGLE);
+#endif
+#ifdef JOYSTICK_ENABLE
+    ConfigSuccess &= ENDPOINT_CONFIG(JOYSTICK_IN_EPNUM, EP_TYPE_INTERRUPT, ENDPOINT_DIR_IN, JOYSTICK_EPSIZE, ENDPOINT_BANK_SINGLE);
 #endif
 }
 
@@ -662,17 +724,17 @@ static void send_mouse(report_mouse_t *report) {
 #endif
 }
 
-/** \brief Send System
+/** \brief Send Extra
  *
  * FIXME: Needs doc
  */
-static void send_system(uint16_t data) {
 #ifdef EXTRAKEY_ENABLE
+static void send_extra(uint8_t report_id, uint16_t data) {
     uint8_t timeout = 255;
 
     if (USB_DeviceState != DEVICE_STATE_Configured) return;
 
-    report_extra_t r = {.report_id = REPORT_ID_SYSTEM, .usage = data - SYSTEM_POWER_DOWN + 1};
+    report_extra_t r = {.report_id = report_id, .usage = data};
     Endpoint_SelectEndpoint(SHARED_IN_EPNUM);
 
     /* Check if write ready for a polling interval around 10ms */
@@ -681,6 +743,16 @@ static void send_system(uint16_t data) {
 
     Endpoint_Write_Stream_LE(&r, sizeof(report_extra_t), NULL);
     Endpoint_ClearIN();
+}
+#endif
+
+/** \brief Send System
+ *
+ * FIXME: Needs doc
+ */
+static void send_system(uint16_t data) {
+#ifdef EXTRAKEY_ENABLE
+    send_extra(REPORT_ID_SYSTEM, data);
 #endif
 }
 
@@ -690,8 +762,7 @@ static void send_system(uint16_t data) {
  */
 static void send_consumer(uint16_t data) {
 #ifdef EXTRAKEY_ENABLE
-    uint8_t timeout = 255;
-    uint8_t where   = where_to_send();
+    uint8_t where = where_to_send();
 
 #    ifdef BLUETOOTH_ENABLE
     if (where == OUTPUT_BLUETOOTH || where == OUTPUT_USB_AND_BT) {
@@ -729,15 +800,7 @@ static void send_consumer(uint16_t data) {
         return;
     }
 
-    report_extra_t r = {.report_id = REPORT_ID_CONSUMER, .usage = data};
-    Endpoint_SelectEndpoint(SHARED_IN_EPNUM);
-
-    /* Check if write ready for a polling interval around 10ms */
-    while (timeout-- && !Endpoint_IsReadWriteAllowed()) _delay_us(40);
-    if (!Endpoint_IsReadWriteAllowed()) return;
-
-    Endpoint_Write_Stream_LE(&r, sizeof(report_extra_t), NULL);
-    Endpoint_ClearIN();
+    send_extra(REPORT_ID_CONSUMER, data);
 #endif
 }
 
@@ -869,7 +932,7 @@ void virtser_recv(uint8_t c) {
 void virtser_task(void) {
     uint16_t count = CDC_Device_BytesReceived(&cdc_device);
     uint8_t  ch;
-    if (count) {
+    for (; count; --count) {
         ch = CDC_Device_ReceiveByte(&cdc_device);
         virtser_recv(ch);
     }
@@ -996,10 +1059,6 @@ int main(void) {
 
 #ifdef MIDI_ENABLE
         MIDI_Device_USBTask(&USB_MIDI_Interface);
-#endif
-
-#if defined(RGBLIGHT_ANIMATIONS) && defined(RGBLIGHT_ENABLE)
-        rgblight_task();
 #endif
 
 #ifdef MODULE_ADAFRUIT_BLE
