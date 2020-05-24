@@ -15,7 +15,6 @@
  */
 #include QMK_KEYBOARD_H
 
-#include "quantum/joystick.h"
 #include <print.h>
 #include <drivers/avr/analog.h>
 
@@ -79,10 +78,10 @@ void oled_task_user(void) {
   oled_write_P(PSTR("Layer"), false);
   switch (biton32(layer_state)) {
     case 0:
-      oled_write_ln_P(PSTR(" BAS"), false);
+      oled_write_ln_P(PSTR(" BASE"), false);
       break;
     case 1:
-      oled_write_ln_P(PSTR(" MOD"), false);
+      oled_write_ln_P(PSTR(" SETTING"), false);
       break;
     //case _FN:
     //  oled_write_ln_P(PSTR(" RGB"), false);

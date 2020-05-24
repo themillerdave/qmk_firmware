@@ -36,7 +36,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define MATRIX_COL_PINS { B5, B4, E6 }
 #define UNUSED_PINS
 
+#ifdef NUMBER_OF_ENCODERS
+#undef NUMBER_OF_ENCODERS
 #define NUMBER_OF_ENCODERS 2
+#endif
 #define ENCODERS_PAD_A { F5, F7 }
 #define ENCODERS_PAD_B { F4, F6 }
 
